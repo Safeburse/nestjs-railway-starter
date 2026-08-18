@@ -32,7 +32,10 @@ with them.
 Four details worth knowing:
 
 - **Migrations run in `preDeployCommand`**, after the build and before the new
-  version takes traffic. The build has no database to connect to.
+  version takes traffic. The build has no database to connect to. `predeploy.sh`
+  retries the migration only on Prisma's `P1001`, the error that means Postgres
+  is not accepting connections yet — the state a project is in on its very first
+  deploy. Railway does not retry a failed pre-deploy command on its own.
 - **`whitelist: true` on the validation pipe** strips properties the DTO does not
   declare, so a request cannot smuggle extra fields into a create call.
 - **`enableShutdownHooks()`.** Railway sends `SIGTERM` before replacing a
