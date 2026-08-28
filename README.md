@@ -28,6 +28,7 @@ with them.
 | `src/health.controller.ts` | `/` and `/health` — the latter runs `SELECT 1` |
 | `railway.json` | Pre-deploy migration, health check, restart policy |
 | `package-lock.json` | Committed, audited clean |
+| `.node-version` | Pins Node, so a new major release upstream cannot change the build under you |
 
 Four details worth knowing:
 
