@@ -15,7 +15,6 @@ and do not expose HTTP until their stories land. The only public routes are
 | `src/{auth,organizations,...}/` | Empty §42 modules (no controllers) |
 | `prisma/migrations/20260904120000_oriva_asset_mvp/` | Full B DDL; drops the template `Note` table |
 | `railway.json` | Pre-deploy migration, health check, restart policy |
-| `.env.example` | `DATABASE_URL` and S3-compatible placeholders |
 
 - **Migrations run in `preDeployCommand`**, after the build and before the new
   version takes traffic. `predeploy.sh` retries only Prisma `P1001`.
@@ -36,11 +35,12 @@ and do not expose HTTP until their stories land. The only public routes are
 
 ```bash
 npm ci
-cp .env.example .env
-# set DATABASE_URL to a Postgres 14+ database
+export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/oriva_asset"
 npx prisma migrate deploy
 npm run dev
 ```
+
+Do not commit `.env` files. Set variables in the shell locally and in the host's dashboard (Railway) for deploys.
 
 ## Configuration
 
