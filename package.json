@@ -1,15 +1,17 @@
 {
-  "name": "nestjs-railway-starter",
+  "name": "oriva-asset-api",
   "version": "1.0.0",
   "private": true,
-  "description": "NestJS 11 + Prisma 7 API starter for Railway",
-  "license": "MIT",
+  "description": "Oriva Asset API — NestJS 11 + Prisma 7, schema 1:1 with Deliverable B",
+  "license": "UNLICENSED",
   "engines": {
     "node": "24.x"
   },
   "scripts": {
     "dev": "nest start --watch",
     "build": "prisma generate && nest build",
+    "lint": "prisma generate && tsc --noEmit",
+    "test": "node -e \"console.log('D-0.1: tests land with Slice 1')\"",
     "migrate": "prisma migrate deploy",
     "migrate:dev": "prisma migrate dev",
     "start": "node dist/main.js"

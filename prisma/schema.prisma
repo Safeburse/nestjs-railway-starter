@@ -1,13 +1,1768 @@
+// Introspected 1:1 from Deliverable B (doc/sql/oriva_asset_mvp.sql).
+// CHECK constraints, triggers, the v_gl_role_balances view, and expression
+// indexes (organizations_singleton, code_sequences_uk) live in the SQL
+// migration only — Prisma cannot represent them.
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["partialIndexes"]
 }
 
 datasource db {
   provider = "postgresql"
 }
 
-model Note {
-  id        String   @id @default(cuid())
-  body      String
-  createdAt DateTime @default(now())
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model accounting_policies {
+  id                                                  String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                     String                     @unique @db.Uuid
+  recognition_basis                                   recognition_basis          @default(TRADE_DATE)
+  cost_method                                         cost_method                @default(WEIGHTED_AVERAGE)
+  transaction_cost_treatment                          transaction_cost_treatment @default(EXPENSE)
+  income_recognition                                  income_recognition         @default(RECEIPT)
+  valuation_basis                                     valuation_basis            @default(FAIR_VALUE)
+  money_scale                                         Int                        @default(2)
+  unit_cost_scale                                     Int                        @default(8)
+  allow_short_selling                                 Boolean                    @default(false)
+  created_at                                          DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at                                          DateTime                   @default(now()) @db.Timestamptz(6)
+  created_by_user_id                                  String?                    @db.Uuid
+  updated_by_user_id                                  String?                    @db.Uuid
+  users_accounting_policies_created_by_user_idTousers users?                     @relation("accounting_policies_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                                       organizations              @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_accounting_policies_updated_by_user_idTousers users?                     @relation("accounting_policies_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+}
+
+model audit_events {
+  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id     String        @db.Uuid
+  actor_user_id       String?       @db.Uuid
+  occurred_at         DateTime      @default(now()) @db.Timestamptz(6)
+  action              String
+  entity_type         String
+  entity_id           String        @db.Uuid
+  previous_state_json Json?
+  new_state_json      Json?
+  reason              String?
+  correlation_id      String
+  ip_address          String?
+  user_agent          String?
+  users               users?        @relation(fields: [actor_user_id], references: [id], onUpdate: NoAction)
+  organizations       organizations @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+
+  @@index([entity_type, entity_id], map: "audit_events_entity_idx")
+  @@index([organization_id, occurred_at(sort: Desc)], map: "audit_events_org_time_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model cash_balances {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String              @db.Uuid
+  client_id             String              @db.Uuid
+  investment_account_id String              @db.Uuid
+  portfolio_id          String              @unique @db.Uuid
+  currency              String              @db.Char(3)
+  total_cash            Decimal             @default(0) @db.Decimal(18, 2)
+  reserved_cash         Decimal             @default(0) @db.Decimal(18, 2)
+  available_cash        Decimal             @default(0) @db.Decimal(18, 2)
+  version               Int                 @default(1)
+  as_of                 DateTime            @default(now()) @db.Timestamptz(6)
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime            @default(now()) @db.Timestamptz(6)
+  clients               clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  investment_accounts   investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations         organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model cash_reservations {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String              @db.Uuid
+  client_id             String              @db.Uuid
+  investment_account_id String              @db.Uuid
+  portfolio_id          String              @db.Uuid
+  purpose               reservation_purpose
+  status                reservation_status  @default(ACTIVE)
+  amount                Decimal             @db.Decimal(18, 2)
+  order_id              String?             @db.Uuid
+  fund_order_id         String?             @db.Uuid
+  transaction_id        String?             @db.Uuid
+  expires_at            DateTime?           @db.Timestamptz(6)
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime            @default(now()) @db.Timestamptz(6)
+  created_by_user_id    String?             @db.Uuid
+  clients               clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users                 users?              @relation(fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  fund_orders           fund_orders?        @relation(fields: [fund_order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  investment_accounts   investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  orders                orders?             @relation(fields: [order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations         organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  transactions          transactions?       @relation(fields: [transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([portfolio_id], map: "cash_reservations_active_idx", where: raw("(status = 'ACTIVE'::reservation_status)"))
+}
+
+model client_bank_accounts {
+  id                                                   String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                      String              @db.Uuid
+  client_id                                            String              @unique(map: "client_bank_accounts_default_uk", where: raw("(is_default AND (status = 'ACTIVE'::bank_account_status))")) @db.Uuid
+  label                                                String
+  bank_name                                            String
+  bank_code                                            String?
+  account_name                                         String
+  account_number                                       String
+  currency                                             String              @db.Char(3)
+  status                                               bank_account_status @default(ACTIVE)
+  is_default                                           Boolean             @default(false)
+  created_at                                           DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at                                           DateTime            @default(now()) @db.Timestamptz(6)
+  created_by_user_id                                   String?             @db.Uuid
+  updated_by_user_id                                   String?             @db.Uuid
+  clients                                              clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_client_bank_accounts_created_by_user_idTousers users?              @relation("client_bank_accounts_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                                        organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_client_bank_accounts_updated_by_user_idTousers users?              @relation("client_bank_accounts_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  transactions                                         transactions[]
+
+  @@unique([organization_id, bank_code, account_number], map: "client_bank_accounts_nuban_uk", where: raw("(bank_code IS NOT NULL)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model client_documents {
+  id                                                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                   String          @db.Uuid
+  client_id                                         String          @db.Uuid
+  type                                              document_type
+  status                                            document_status @default(UPLOADED)
+  file_name                                         String
+  object_key                                        String
+  mime_type                                         String
+  byte_size                                         Int
+  sha256                                            String
+  verified_by_user_id                               String?         @db.Uuid
+  created_at                                        DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at                                        DateTime        @default(now()) @db.Timestamptz(6)
+  created_by_user_id                                String?         @db.Uuid
+  updated_by_user_id                                String?         @db.Uuid
+  clients                                           clients         @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_client_documents_created_by_user_idTousers  users?          @relation("client_documents_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                                     organizations   @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_client_documents_updated_by_user_idTousers  users?          @relation("client_documents_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  users_client_documents_verified_by_user_idTousers users?          @relation("client_documents_verified_by_user_idTousers", fields: [verified_by_user_id], references: [id], onUpdate: NoAction)
+  fund_orders                                       fund_orders[]
+  orders                                            orders[]
+}
+
+model clients {
+  id                                      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                         String                 @db.Uuid
+  code                                    String
+  type                                    client_type
+  status                                  client_status          @default(DRAFT)
+  legal_name                              String
+  display_name                            String?
+  email                                   String?                @db.Citext
+  phone                                   String?
+  country                                 String                 @default("NG") @db.Char(2)
+  tax_id                                  String?
+  risk_rating                             String?
+  onboarded_at                            DateTime?              @db.Date
+  chn                                     String?
+  notes                                   String?
+  created_at                              DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at                              DateTime               @default(now()) @db.Timestamptz(6)
+  created_by_user_id                      String?                @db.Uuid
+  updated_by_user_id                      String?                @db.Uuid
+  cash_balances                           cash_balances[]
+  cash_reservations                       cash_reservations[]
+  client_bank_accounts                    client_bank_accounts?
+  client_documents                        client_documents[]
+  users_clients_created_by_user_idTousers users?                 @relation("clients_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                           organizations          @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_clients_updated_by_user_idTousers users?                 @relation("clients_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  compliance_checks                       compliance_checks[]
+  fee_accruals                            fee_accruals[]
+  fund_orders                             fund_orders[]
+  fund_unit_positions                     fund_unit_positions[]
+  investment_accounts                     investment_accounts[]
+  kyc_records                             kyc_records[]
+  ledger_entries                          ledger_entries[]
+  ledger_journals                         ledger_journals[]
+  orders                                  orders[]
+  performance_records                     performance_records[]
+  portfolio_mandates                      portfolio_mandates[]
+  portfolio_valuations                    portfolio_valuations[]
+  portfolios                              portfolios[]
+  position_lots                           position_lots[]
+  positions                               positions[]
+  reports                                 reports[]
+  role_assignments                        role_assignments[]
+  settlements                             settlements[]
+  trades                                  trades[]
+  transactions                            transactions[]
+  users_users_client_idToclients          users[]                @relation("users_client_idToclients")
+
+  @@unique([organization_id, chn], map: "clients_chn_uk", where: raw("(chn IS NOT NULL)"))
+  @@unique([organization_id, code])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model code_sequences {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  entity_key      String
+  period_year     Int?
+  last_value      Int           @default(0)
+  organizations   organizations @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+}
+
+model compliance_breaches {
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id     String            @db.Uuid
+  portfolio_id        String            @db.Uuid
+  compliance_check_id String            @db.Uuid
+  status              breach_status     @default(OPEN)
+  waived_by_user_id   String?           @db.Uuid
+  waiver_reason       String?
+  resolved_at         DateTime?         @db.Timestamptz(6)
+  created_at          DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime          @default(now()) @db.Timestamptz(6)
+  compliance_checks   compliance_checks @relation(fields: [compliance_check_id], references: [id], onUpdate: NoAction)
+  organizations       organizations     @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios          portfolios        @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  users               users?            @relation(fields: [waived_by_user_id], references: [id], onUpdate: NoAction)
+}
+
+model compliance_checks {
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String                @db.Uuid
+  client_id             String                @db.Uuid
+  investment_account_id String                @db.Uuid
+  portfolio_id          String                @db.Uuid
+  order_id              String?               @db.Uuid
+  transaction_id        String?               @db.Uuid
+  mandate_rule_id       String?               @db.Uuid
+  rule_code             String
+  result                compliance_result
+  message               String
+  evaluated_at          DateTime              @default(now()) @db.Timestamptz(6)
+  details_json          Json?
+  created_at            DateTime              @default(now()) @db.Timestamptz(6)
+  compliance_breaches   compliance_breaches[]
+  clients               clients               @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  investment_accounts   investment_accounts   @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  mandate_rules         mandate_rules?        @relation(fields: [mandate_rule_id], references: [id], onUpdate: NoAction)
+  orders                orders?               @relation(fields: [order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations         organizations         @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios            @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  transactions          transactions?         @relation(fields: [transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([order_id], map: "compliance_checks_order_idx")
+}
+
+model fee_accruals {
+  id                                                                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                                   String              @db.Uuid
+  client_id                                                         String              @db.Uuid
+  investment_account_id                                             String              @db.Uuid
+  portfolio_id                                                      String              @db.Uuid
+  fee_rule_id                                                       String              @db.Uuid
+  status                                                            fee_accrual_status  @default(ACCRUED)
+  period_start                                                      DateTime            @db.Date
+  period_end                                                        DateTime            @db.Date
+  base_nav                                                          Decimal             @db.Decimal(18, 2)
+  amount                                                            Decimal             @db.Decimal(18, 2)
+  accrual_transaction_id                                            String?             @db.Uuid
+  collection_transaction_id                                         String?             @db.Uuid
+  created_at                                                        DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at                                                        DateTime            @default(now()) @db.Timestamptz(6)
+  transactions_fee_accruals_accrual_transaction_idTotransactions    transactions?       @relation("fee_accruals_accrual_transaction_idTotransactions", fields: [accrual_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  clients                                                           clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  transactions_fee_accruals_collection_transaction_idTotransactions transactions?       @relation("fee_accruals_collection_transaction_idTotransactions", fields: [collection_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  fee_rules                                                         fee_rules           @relation(fields: [fee_rule_id], references: [id], onUpdate: NoAction)
+  investment_accounts                                               investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations                                                     organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios                                                        portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  transactions_transactions_fee_accrual_idTofee_accruals            transactions[]      @relation("transactions_fee_accrual_idTofee_accruals")
+
+  @@index([portfolio_id, status], map: "fee_accruals_portfolio_status_idx")
+}
+
+model fee_rules {
+  id                                        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                           String          @db.Uuid
+  portfolio_id                              String?         @db.Uuid
+  name                                      String
+  type                                      fee_type
+  status                                    fee_rule_status @default(ACTIVE)
+  accrual_frequency                         String?
+  rate_bps                                  Decimal?        @db.Decimal(12, 4)
+  flat_amount                               Decimal?        @db.Decimal(18, 2)
+  transaction_rate_bps                      Decimal?        @db.Decimal(12, 4)
+  min_amount                                Decimal?        @db.Decimal(18, 2)
+  currency                                  String          @db.Char(3)
+  created_at                                DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at                                DateTime        @default(now()) @db.Timestamptz(6)
+  created_by_user_id                        String?         @db.Uuid
+  updated_by_user_id                        String?         @db.Uuid
+  fee_accruals                              fee_accruals[]
+  users_fee_rules_created_by_user_idTousers users?          @relation("fee_rules_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                             organizations   @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios                                portfolios?     @relation(fields: [portfolio_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_fee_rules_updated_by_user_idTousers users?          @relation("fee_rules_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model fund_nav_prices {
+  id                        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id           String        @db.Uuid
+  fund_id                   String        @db.Uuid
+  price_date                DateTime      @db.Date
+  nav_per_unit              Decimal       @db.Decimal(28, 8)
+  accrued_interest_per_unit Decimal       @default(0) @db.Decimal(28, 8)
+  source                    String
+  is_official               Boolean       @default(true)
+  created_at                DateTime      @default(now()) @db.Timestamptz(6)
+  created_by_user_id        String?       @db.Uuid
+  users                     users?        @relation(fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  funds                     funds         @relation(fields: [fund_id], references: [id], onUpdate: NoAction)
+  organizations             organizations @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  fund_orders               fund_orders[]
+
+  @@index([fund_id, price_date(sort: Desc), created_at(sort: Desc)], map: "fund_nav_prices_lookup_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model fund_orders {
+  id                                                   String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                      String              @db.Uuid
+  client_id                                            String              @db.Uuid
+  investment_account_id                                String              @db.Uuid
+  portfolio_id                                         String              @db.Uuid
+  fund_id                                              String              @db.Uuid
+  code                                                 String
+  side                                                 cis_order_side
+  funding_source                                       cis_funding_source  @default(FUND_CUSTODIAN)
+  status                                               order_status        @default(DRAFT)
+  amount                                               Decimal?            @db.Decimal(18, 2)
+  units                                                Decimal?            @db.Decimal(28, 8)
+  estimated_units                                      Decimal?            @db.Decimal(28, 8)
+  estimated_proceeds                                   Decimal?            @db.Decimal(18, 2)
+  nav_price_id                                         String?             @db.Uuid
+  nav_per_unit                                         Decimal?            @db.Decimal(28, 8)
+  units_issued                                         Decimal?            @db.Decimal(28, 8)
+  proceeds                                             Decimal?            @db.Decimal(18, 2)
+  custodian_reference                                  String?
+  payment_verified_at                                  DateTime?           @db.Timestamptz(6)
+  payment_verified_by_user_id                          String?             @db.Uuid
+  instruction_document_id                              String              @db.Uuid
+  callback_at                                          DateTime?           @db.Timestamptz(6)
+  callback_by_user_id                                  String?             @db.Uuid
+  callback_outcome                                     callback_outcome?
+  callback_notes                                       String?
+  submitted_at                                         DateTime?           @db.Timestamptz(6)
+  submitted_by_user_id                                 String?             @db.Uuid
+  approved_at                                          DateTime?           @db.Timestamptz(6)
+  approved_by_user_id                                  String?             @db.Uuid
+  confirmed_at                                         DateTime?           @db.Timestamptz(6)
+  confirmed_by_user_id                                 String?             @db.Uuid
+  rejected_at                                          DateTime?           @db.Timestamptz(6)
+  rejected_by_user_id                                  String?             @db.Uuid
+  rejection_reason                                     String?
+  cancelled_at                                         DateTime?           @db.Timestamptz(6)
+  cancel_reason                                        String?
+  notes                                                String?
+  correlation_id                                       String?
+  created_at                                           DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at                                           DateTime            @default(now()) @db.Timestamptz(6)
+  created_by_user_id                                   String?             @db.Uuid
+  updated_by_user_id                                   String?             @db.Uuid
+  cash_reservations                                    cash_reservations[]
+  users_fund_orders_approved_by_user_idTousers         users?              @relation("fund_orders_approved_by_user_idTousers", fields: [approved_by_user_id], references: [id], onUpdate: NoAction)
+  users_fund_orders_callback_by_user_idTousers         users?              @relation("fund_orders_callback_by_user_idTousers", fields: [callback_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  clients                                              clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_fund_orders_confirmed_by_user_idTousers        users?              @relation("fund_orders_confirmed_by_user_idTousers", fields: [confirmed_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_fund_orders_created_by_user_idTousers          users?              @relation("fund_orders_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  funds                                                funds               @relation(fields: [fund_id], references: [id], onUpdate: NoAction)
+  client_documents                                     client_documents    @relation(fields: [instruction_document_id], references: [id], onUpdate: NoAction)
+  investment_accounts                                  investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  fund_nav_prices                                      fund_nav_prices?    @relation(fields: [nav_price_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations                                        organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_fund_orders_payment_verified_by_user_idTousers users?              @relation("fund_orders_payment_verified_by_user_idTousers", fields: [payment_verified_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  portfolios                                           portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  users_fund_orders_rejected_by_user_idTousers         users?              @relation("fund_orders_rejected_by_user_idTousers", fields: [rejected_by_user_id], references: [id], onUpdate: NoAction)
+  users_fund_orders_submitted_by_user_idTousers        users?              @relation("fund_orders_submitted_by_user_idTousers", fields: [submitted_by_user_id], references: [id], onUpdate: NoAction)
+  users_fund_orders_updated_by_user_idTousers          users?              @relation("fund_orders_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  ledger_journals                                      ledger_journals[]
+
+  @@unique([organization_id, custodian_reference], map: "fund_orders_custodian_ref_uidx", where: raw("(custodian_reference IS NOT NULL)"))
+  @@unique([organization_id, code])
+  @@index([fund_id, status], map: "fund_orders_fund_status_idx")
+  @@index([portfolio_id, status], map: "fund_orders_portfolio_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model fund_unit_positions {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String              @db.Uuid
+  client_id             String              @db.Uuid
+  investment_account_id String              @db.Uuid
+  portfolio_id          String              @db.Uuid
+  fund_id               String              @db.Uuid
+  units_total           Decimal             @default(0) @db.Decimal(28, 8)
+  cost_total            Decimal             @default(0) @db.Decimal(18, 2)
+  average_unit_cost     Decimal             @default(0) @db.Decimal(28, 8)
+  folio_number          String?
+  version               Int                 @default(1)
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime            @default(now()) @db.Timestamptz(6)
+  updated_by_user_id    String?             @db.Uuid
+  clients               clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  funds                 funds               @relation(fields: [fund_id], references: [id], onUpdate: NoAction)
+  investment_accounts   investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations         organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  users                 users?              @relation(fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+
+  @@unique([fund_id, folio_number], map: "fund_unit_positions_folio_uidx", where: raw("(folio_number IS NOT NULL)"))
+  @@unique([portfolio_id, fund_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model funds {
+  id                                    String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                       String                      @db.Uuid
+  code                                  String
+  name                                  String
+  status                                fund_status                 @default(DRAFT)
+  base_currency                         String                      @default("NGN") @db.Char(3)
+  cash_total                            Decimal                     @default(0) @db.Decimal(18, 2)
+  units_outstanding                     Decimal                     @default(0) @db.Decimal(28, 8)
+  version                               Int                         @default(1)
+  inception_on                          DateTime?                   @db.Date
+  closed_on                             DateTime?                   @db.Date
+  custodian_bank_name                   String?
+  custodian_account_name                String?
+  custodian_account_number              String?
+  created_at                            DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at                            DateTime                    @default(now()) @db.Timestamptz(6)
+  created_by_user_id                    String?                     @db.Uuid
+  updated_by_user_id                    String?                     @db.Uuid
+  fund_nav_prices                       fund_nav_prices[]
+  fund_orders                           fund_orders[]
+  fund_unit_positions                   fund_unit_positions[]
+  users_funds_created_by_user_idTousers users?                      @relation("funds_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                         organizations               @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_funds_updated_by_user_idTousers users?                      @relation("funds_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  ledger_entries                        ledger_entries[]
+  portfolio_valuation_lines             portfolio_valuation_lines[]
+
+  @@unique([organization_id, code])
+}
+
+model idempotency_records {
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id    String        @db.Uuid
+  key                String
+  endpoint           String
+  request_hash       String
+  response_code      Int
+  response_body_json Json
+  transaction_id     String?       @db.Uuid
+  created_at         DateTime      @default(now()) @db.Timestamptz(6)
+  organizations      organizations @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  transactions       transactions? @relation(fields: [transaction_id], references: [id], onUpdate: NoAction)
+
+  @@unique([organization_id, key])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model investment_accounts {
+  id                                                  String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                     String                      @db.Uuid
+  client_id                                           String                      @db.Uuid
+  code                                                String
+  name                                                String
+  status                                              investment_account_status   @default(PENDING)
+  base_currency                                       String                      @default("NGN") @db.Char(3)
+  opened_on                                           DateTime?                   @db.Date
+  closed_on                                           DateTime?                   @db.Date
+  external_reference                                  String?
+  equity_holding_arrangement                          equity_holding_arrangement?
+  cscs_sub_account_code                               String?
+  created_at                                          DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at                                          DateTime                    @default(now()) @db.Timestamptz(6)
+  created_by_user_id                                  String?                     @db.Uuid
+  updated_by_user_id                                  String?                     @db.Uuid
+  cash_balances                                       cash_balances[]
+  cash_reservations                                   cash_reservations[]
+  compliance_checks                                   compliance_checks[]
+  fee_accruals                                        fee_accruals[]
+  fund_orders                                         fund_orders[]
+  fund_unit_positions                                 fund_unit_positions[]
+  clients                                             clients                     @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_investment_accounts_created_by_user_idTousers users?                      @relation("investment_accounts_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                                       organizations               @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_investment_accounts_updated_by_user_idTousers users?                      @relation("investment_accounts_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  ledger_entries                                      ledger_entries[]
+  ledger_journals                                     ledger_journals[]
+  orders                                              orders[]
+  performance_records                                 performance_records[]
+  portfolio_mandates                                  portfolio_mandates[]
+  portfolio_valuations                                portfolio_valuations[]
+  portfolios                                          portfolios[]
+  position_lots                                       position_lots[]
+  positions                                           positions[]
+  settlements                                         settlements[]
+  trades                                              trades[]
+  transactions                                        transactions[]
+
+  @@unique([organization_id, cscs_sub_account_code], map: "investment_accounts_direct_cscs_uk", where: raw("((equity_holding_arrangement = 'DIRECT_BROKERAGE'::equity_holding_arrangement) AND (cscs_sub_account_code IS NOT NULL))"))
+  @@unique([organization_id, code])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model kyc_records {
+  id                                           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                              String             @db.Uuid
+  client_id                                    String             @db.Uuid
+  status                                       kyc_status         @default(PENDING)
+  reviewed_by_user_id                          String?            @db.Uuid
+  reviewed_at                                  DateTime?          @db.Timestamptz(6)
+  expires_on                                   DateTime?          @db.Date
+  bvn_encrypted                                String?
+  nin_encrypted                                String?
+  photo_id_type                                kyc_photo_id_type?
+  id_number_encrypted                          String?
+  id_country                                   String?
+  pep_flag                                     Boolean            @default(false)
+  notes                                        String?
+  rejection_reason                             String?
+  created_at                                   DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at                                   DateTime           @default(now()) @db.Timestamptz(6)
+  created_by_user_id                           String?            @db.Uuid
+  updated_by_user_id                           String?            @db.Uuid
+  clients                                      clients            @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_kyc_records_created_by_user_idTousers  users?             @relation("kyc_records_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                                organizations      @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_kyc_records_reviewed_by_user_idTousers users?             @relation("kyc_records_reviewed_by_user_idTousers", fields: [reviewed_by_user_id], references: [id], onUpdate: NoAction)
+  users_kyc_records_updated_by_user_idTousers  users?             @relation("kyc_records_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+
+  @@index([client_id, created_at(sort: Desc)], map: "kyc_records_client_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model ledger_accounts {
+  id                                              String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                 String                   @db.Uuid
+  code                                            String
+  name                                            String
+  type                                            ledger_account_type
+  role                                            ledger_account_role?
+  is_postable                                     Boolean
+  is_system                                       Boolean                  @default(false)
+  normal_debit                                    Boolean
+  parent_id                                       String?                  @db.Uuid
+  status                                          ledger_account_lifecycle @default(ACTIVE)
+  created_at                                      DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at                                      DateTime                 @default(now()) @db.Timestamptz(6)
+  created_by_user_id                              String?                  @db.Uuid
+  updated_by_user_id                              String?                  @db.Uuid
+  users_ledger_accounts_created_by_user_idTousers users?                   @relation("ledger_accounts_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                                   organizations            @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  ledger_accounts                                 ledger_accounts?         @relation("ledger_accountsToledger_accounts", fields: [parent_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_ledger_accounts                           ledger_accounts[]        @relation("ledger_accountsToledger_accounts")
+  users_ledger_accounts_updated_by_user_idTousers users?                   @relation("ledger_accounts_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  ledger_entries                                  ledger_entries[]
+
+  @@unique([organization_id, code])
+  @@unique([organization_id, role], map: "ledger_accounts_role_uk", where: raw("(role IS NOT NULL)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model ledger_entries {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String              @db.Uuid
+  client_id             String              @db.Uuid
+  investment_account_id String              @db.Uuid
+  portfolio_id          String              @db.Uuid
+  journal_id            String              @db.Uuid
+  ledger_account_id     String              @db.Uuid
+  role                  ledger_account_role
+  debit                 Decimal             @default(0) @db.Decimal(18, 2)
+  credit                Decimal             @default(0) @db.Decimal(18, 2)
+  amount                Decimal             @db.Decimal(18, 2)
+  currency              String              @db.Char(3)
+  security_id           String?             @db.Uuid
+  fund_id               String?             @db.Uuid
+  description           String?
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  clients               clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  funds                 funds?              @relation(fields: [fund_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  investment_accounts   investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  ledger_journals       ledger_journals     @relation(fields: [journal_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ledger_accounts       ledger_accounts     @relation(fields: [ledger_account_id], references: [id], onUpdate: NoAction)
+  organizations         organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  securities            securities?         @relation(fields: [security_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([portfolio_id, ledger_account_id], map: "ledger_entries_gl_idx")
+  @@index([journal_id], map: "ledger_entries_journal_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model ledger_journals {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String              @db.Uuid
+  client_id             String              @db.Uuid
+  investment_account_id String              @db.Uuid
+  portfolio_id          String              @db.Uuid
+  transaction_id        String              @db.Uuid
+  trade_id              String?             @db.Uuid
+  settlement_id         String?             @db.Uuid
+  fund_order_id         String?             @db.Uuid
+  code                  String
+  type                  journal_type
+  status                journal_status      @default(POSTED)
+  value_date            DateTime            @db.Date
+  posting_date          DateTime            @db.Date
+  description           String
+  reverses_journal_id   String?             @db.Uuid
+  debit_total           Decimal             @db.Decimal(18, 2)
+  credit_total          Decimal             @db.Decimal(18, 2)
+  correlation_id        String?
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  created_by_user_id    String?             @db.Uuid
+  ledger_entries        ledger_entries[]
+  clients               clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users                 users?              @relation(fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  fund_orders           fund_orders?        @relation(fields: [fund_order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  investment_accounts   investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations         organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  ledger_journals       ledger_journals?    @relation("ledger_journalsToledger_journals", fields: [reverses_journal_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_ledger_journals ledger_journals[]   @relation("ledger_journalsToledger_journals")
+  settlements           settlements?        @relation(fields: [settlement_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  trades                trades?             @relation(fields: [trade_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  transactions          transactions        @relation(fields: [transaction_id], references: [id], onUpdate: NoAction)
+
+  @@unique([organization_id, code])
+  @@unique([transaction_id, type])
+  @@index([portfolio_id, value_date], map: "ledger_journals_portfolio_date_idx")
+}
+
+model mandate_rules {
+  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id    String              @db.Uuid
+  mandate_id         String              @db.Uuid
+  type               mandate_rule_type
+  security_class     security_class?
+  security_id        String?             @db.Uuid
+  value_numeric      Decimal?            @db.Decimal(18, 6)
+  value_text         String?
+  is_blocking        Boolean             @default(true)
+  created_at         DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime            @default(now()) @db.Timestamptz(6)
+  compliance_checks  compliance_checks[]
+  portfolio_mandates portfolio_mandates  @relation(fields: [mandate_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations      organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  securities         securities?         @relation(fields: [security_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "mandate_rules_security_fk")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model orders {
+  id                                       String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                          String              @db.Uuid
+  client_id                                String              @db.Uuid
+  investment_account_id                    String              @db.Uuid
+  portfolio_id                             String              @db.Uuid
+  security_id                              String              @db.Uuid
+  code                                     String
+  side                                     order_side
+  order_type                               order_type
+  status                                   order_status        @default(DRAFT)
+  quantity                                 Decimal             @db.Decimal(28, 8)
+  limit_price                              Decimal?            @db.Decimal(28, 8)
+  estimated_consideration                  Decimal             @db.Decimal(18, 2)
+  estimated_fees                           Decimal             @default(0) @db.Decimal(18, 2)
+  estimated_cash_impact                    Decimal             @db.Decimal(18, 2)
+  mandate_snapshot_json                    Json?
+  submitted_at                             DateTime?           @db.Timestamptz(6)
+  submitted_by_user_id                     String?             @db.Uuid
+  approved_at                              DateTime?           @db.Timestamptz(6)
+  approved_by_user_id                      String?             @db.Uuid
+  rejected_at                              DateTime?           @db.Timestamptz(6)
+  rejected_by_user_id                      String?             @db.Uuid
+  rejection_reason                         String?
+  cancelled_at                             DateTime?           @db.Timestamptz(6)
+  cancel_reason                            String?
+  notes                                    String?
+  instruction_document_id                  String              @db.Uuid
+  callback_at                              DateTime?           @db.Timestamptz(6)
+  callback_by_user_id                      String?             @db.Uuid
+  callback_outcome                         callback_outcome?
+  callback_notes                           String?
+  correlation_id                           String?
+  created_at                               DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at                               DateTime            @default(now()) @db.Timestamptz(6)
+  created_by_user_id                       String?             @db.Uuid
+  updated_by_user_id                       String?             @db.Uuid
+  cash_reservations                        cash_reservations[]
+  compliance_checks                        compliance_checks[]
+  users_orders_approved_by_user_idTousers  users?              @relation("orders_approved_by_user_idTousers", fields: [approved_by_user_id], references: [id], onUpdate: NoAction)
+  users_orders_callback_by_user_idTousers  users?              @relation("orders_callback_by_user_idTousers", fields: [callback_by_user_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  clients                                  clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_orders_created_by_user_idTousers   users?              @relation("orders_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  client_documents                         client_documents    @relation(fields: [instruction_document_id], references: [id], onUpdate: NoAction)
+  investment_accounts                      investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations                            organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios                               portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  users_orders_rejected_by_user_idTousers  users?              @relation("orders_rejected_by_user_idTousers", fields: [rejected_by_user_id], references: [id], onUpdate: NoAction)
+  securities                               securities          @relation(fields: [security_id], references: [id], onUpdate: NoAction)
+  users_orders_submitted_by_user_idTousers users?              @relation("orders_submitted_by_user_idTousers", fields: [submitted_by_user_id], references: [id], onUpdate: NoAction)
+  users_orders_updated_by_user_idTousers   users?              @relation("orders_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  trades                                   trades?
+  transactions                             transactions[]
+
+  @@unique([organization_id, code])
+  @@index([organization_id, created_at(sort: Desc)], map: "orders_org_created_idx")
+  @@index([portfolio_id, status], map: "orders_portfolio_status_idx")
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model organizations {
+  id                                            String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                                          String                      @unique
+  legal_name                                    String
+  display_name                                  String
+  status                                        organization_status         @default(PENDING)
+  country                                       String                      @default("NG") @db.Char(2)
+  timezone                                      String                      @default("Africa/Lagos")
+  slug                                          String?                     @unique
+  logo_object_key                               String?
+  primary_color                                 String?
+  secondary_color                               String?
+  custom_domain                                 String?                     @unique
+  email_from_name                               String?
+  email_from_address                            String?
+  report_footer                                 String?
+  terminology_json                              Json?
+  notification_settings_json                    Json?
+  executing_broker_name                         String?
+  custodian_name                                String?
+  created_at                                    DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at                                    DateTime                    @default(now()) @db.Timestamptz(6)
+  created_by_user_id                            String?                     @db.Uuid
+  updated_by_user_id                            String?                     @db.Uuid
+  accounting_policies                           accounting_policies?
+  audit_events                                  audit_events[]
+  cash_balances                                 cash_balances[]
+  cash_reservations                             cash_reservations[]
+  client_bank_accounts                          client_bank_accounts[]
+  client_documents                              client_documents[]
+  clients                                       clients[]
+  code_sequences                                code_sequences[]
+  compliance_breaches                           compliance_breaches[]
+  compliance_checks                             compliance_checks[]
+  fee_accruals                                  fee_accruals[]
+  fee_rules                                     fee_rules[]
+  fund_nav_prices                               fund_nav_prices[]
+  fund_orders                                   fund_orders[]
+  fund_unit_positions                           fund_unit_positions[]
+  funds                                         funds[]
+  idempotency_records                           idempotency_records[]
+  investment_accounts                           investment_accounts[]
+  kyc_records                                   kyc_records[]
+  ledger_accounts                               ledger_accounts[]
+  ledger_entries                                ledger_entries[]
+  ledger_journals                               ledger_journals[]
+  mandate_rules                                 mandate_rules[]
+  orders                                        orders[]
+  users_organizations_created_by_user_idTousers users?                      @relation("organizations_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction, map: "organizations_created_by_fk")
+  users_organizations_updated_by_user_idTousers users?                      @relation("organizations_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction, map: "organizations_updated_by_fk")
+  performance_records                           performance_records[]
+  portfolio_mandates                            portfolio_mandates[]
+  portfolio_valuation_lines                     portfolio_valuation_lines[]
+  portfolio_valuations                          portfolio_valuations[]
+  portfolios                                    portfolios[]
+  position_lots                                 position_lots[]
+  positions                                     positions[]
+  reports                                       reports[]
+  role_assignments                              role_assignments[]
+  roles                                         roles[]
+  securities                                    securities[]
+  security_prices                               security_prices[]
+  settlements                                   settlements[]
+  trades                                        trades[]
+  transactions                                  transactions[]
+  users_users_organization_idToorganizations    users[]                     @relation("users_organization_idToorganizations")
+}
+
+model performance_records {
+  id                    String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String                  @db.Uuid
+  client_id             String                  @db.Uuid
+  investment_account_id String                  @db.Uuid
+  portfolio_id          String                  @db.Uuid
+  period_type           performance_period_type
+  period_start          DateTime                @db.Date
+  period_end            DateTime                @db.Date
+  begin_market_nav      Decimal                 @db.Decimal(18, 2)
+  end_market_nav        Decimal                 @db.Decimal(18, 2)
+  net_flows             Decimal                 @default(0) @db.Decimal(18, 2)
+  fees                  Decimal                 @default(0) @db.Decimal(18, 2)
+  realized_pnl          Decimal                 @default(0) @db.Decimal(18, 2)
+  unrealized_change     Decimal                 @default(0) @db.Decimal(18, 2)
+  simple_return_pct     Decimal?                @db.Decimal(18, 8)
+  created_at            DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime                @default(now()) @db.Timestamptz(6)
+  clients               clients                 @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  investment_accounts   investment_accounts     @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations         organizations           @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios              @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+
+  @@unique([portfolio_id, period_type, period_start, period_end])
+}
+
+model permissions {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code             String             @unique
+  description      String
+  resource         String
+  created_at       DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime           @default(now()) @db.Timestamptz(6)
+  role_permissions role_permissions[]
+}
+
+model portfolio_mandates {
+  id                                                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                    String              @db.Uuid
+  client_id                                          String              @db.Uuid
+  investment_account_id                              String              @db.Uuid
+  portfolio_id                                       String              @unique(map: "portfolio_mandates_active_uk", where: raw("(status = 'ACTIVE'::mandate_status)")) @db.Uuid
+  name                                               String
+  status                                             mandate_status      @default(DRAFT)
+  effective_from                                     DateTime            @db.Date
+  effective_to                                       DateTime?           @db.Date
+  notes                                              String?
+  created_at                                         DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at                                         DateTime            @default(now()) @db.Timestamptz(6)
+  created_by_user_id                                 String?             @db.Uuid
+  updated_by_user_id                                 String?             @db.Uuid
+  mandate_rules                                      mandate_rules[]
+  clients                                            clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_portfolio_mandates_created_by_user_idTousers users?              @relation("portfolio_mandates_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  investment_accounts                                investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations                                      organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios                                         portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  users_portfolio_mandates_updated_by_user_idTousers users?              @relation("portfolio_mandates_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model portfolio_valuation_lines {
+  id                   String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id      String               @db.Uuid
+  valuation_id         String               @db.Uuid
+  security_id          String?              @db.Uuid
+  fund_id              String?              @db.Uuid
+  quantity             Decimal              @db.Decimal(28, 8)
+  cost                 Decimal              @db.Decimal(18, 2)
+  price                Decimal              @db.Decimal(28, 8)
+  price_date           DateTime             @db.Date
+  is_stale             Boolean              @default(false)
+  accrued_interest     Decimal              @default(0) @db.Decimal(18, 2)
+  market_value         Decimal              @db.Decimal(18, 2)
+  unrealized_pnl       Decimal              @db.Decimal(18, 2)
+  funds                funds?               @relation(fields: [fund_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations        organizations        @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  securities           securities?          @relation(fields: [security_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  portfolio_valuations portfolio_valuations @relation(fields: [valuation_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model portfolio_valuations {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id           String                      @db.Uuid
+  client_id                 String                      @db.Uuid
+  investment_account_id     String                      @db.Uuid
+  portfolio_id              String                      @db.Uuid
+  valuation_date            DateTime                    @db.Date
+  run_at                    DateTime                    @default(now()) @db.Timestamptz(6)
+  currency                  String                      @db.Char(3)
+  cash                      Decimal                     @db.Decimal(18, 2)
+  settlements_receivable    Decimal                     @default(0) @db.Decimal(18, 2)
+  settlements_payable       Decimal                     @default(0) @db.Decimal(18, 2)
+  withdrawal_payable        Decimal                     @default(0) @db.Decimal(18, 2)
+  fees_payable              Decimal                     @default(0) @db.Decimal(18, 2)
+  investments_cost          Decimal                     @db.Decimal(18, 2)
+  investments_market_value  Decimal                     @db.Decimal(18, 2)
+  unrealized_pnl            Decimal                     @db.Decimal(18, 2)
+  book_nav                  Decimal                     @db.Decimal(18, 2)
+  market_nav                Decimal                     @db.Decimal(18, 2)
+  has_stale_prices          Boolean                     @default(false)
+  stale_notes               String?
+  created_at                DateTime                    @default(now()) @db.Timestamptz(6)
+  created_by_user_id        String?                     @db.Uuid
+  portfolio_valuation_lines portfolio_valuation_lines[]
+  clients                   clients                     @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users                     users?                      @relation(fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  investment_accounts       investment_accounts         @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations             organizations               @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios                portfolios                  @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+
+  @@unique([portfolio_id, valuation_date, run_at])
+}
+
+model portfolios {
+  id                                         String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                            String                 @db.Uuid
+  client_id                                  String                 @db.Uuid
+  investment_account_id                      String                 @db.Uuid
+  code                                       String
+  name                                       String
+  status                                     portfolio_status       @default(PENDING)
+  base_currency                              String                 @default("NGN") @db.Char(3)
+  inception_on                               DateTime?              @db.Date
+  closed_on                                  DateTime?              @db.Date
+  benchmark_name                             String?
+  created_at                                 DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at                                 DateTime               @default(now()) @db.Timestamptz(6)
+  created_by_user_id                         String?                @db.Uuid
+  updated_by_user_id                         String?                @db.Uuid
+  cash_balances                              cash_balances?
+  cash_reservations                          cash_reservations[]
+  compliance_breaches                        compliance_breaches[]
+  compliance_checks                          compliance_checks[]
+  fee_accruals                               fee_accruals[]
+  fee_rules                                  fee_rules[]
+  fund_orders                                fund_orders[]
+  fund_unit_positions                        fund_unit_positions[]
+  ledger_entries                             ledger_entries[]
+  ledger_journals                            ledger_journals[]
+  orders                                     orders[]
+  performance_records                        performance_records[]
+  portfolio_mandates                         portfolio_mandates?
+  portfolio_valuations                       portfolio_valuations[]
+  clients                                    clients                @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_portfolios_created_by_user_idTousers users?                 @relation("portfolios_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  investment_accounts                        investment_accounts    @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations                              organizations          @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_portfolios_updated_by_user_idTousers users?                 @relation("portfolios_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  position_lots                              position_lots[]
+  positions                                  positions[]
+  reports                                    reports[]
+  settlements                                settlements[]
+  trades                                     trades[]
+  transactions                               transactions[]
+
+  @@unique([organization_id, code])
+  @@index([investment_account_id], map: "portfolios_account_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model position_lots {
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String                @db.Uuid
+  client_id             String                @db.Uuid
+  investment_account_id String                @db.Uuid
+  portfolio_id          String                @db.Uuid
+  position_id           String                @db.Uuid
+  security_id           String                @db.Uuid
+  source_trade_id       String?               @db.Uuid
+  source_transaction_id String                @db.Uuid
+  status                lot_status            @default(OPEN)
+  settlement_status     lot_settlement_status @default(UNSETTLED)
+  open_date             DateTime              @db.Date
+  quantity_opened       Decimal               @db.Decimal(28, 8)
+  quantity_remaining    Decimal               @db.Decimal(28, 8)
+  unit_cost             Decimal               @db.Decimal(28, 8)
+  cost_remaining        Decimal               @db.Decimal(18, 2)
+  created_at            DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime              @default(now()) @db.Timestamptz(6)
+  clients               clients               @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  investment_accounts   investment_accounts   @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations         organizations         @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios            @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  positions             positions             @relation(fields: [position_id], references: [id], onUpdate: NoAction)
+  securities            securities            @relation(fields: [security_id], references: [id], onUpdate: NoAction)
+  trades                trades?               @relation(fields: [source_trade_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  transactions          transactions          @relation(fields: [source_transaction_id], references: [id], onUpdate: NoAction)
+
+  @@index([position_id, status], map: "position_lots_open_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model positions {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String              @db.Uuid
+  client_id             String              @db.Uuid
+  investment_account_id String              @db.Uuid
+  portfolio_id          String              @db.Uuid
+  security_id           String              @db.Uuid
+  quantity_total        Decimal             @default(0) @db.Decimal(28, 8)
+  quantity_settled      Decimal             @default(0) @db.Decimal(28, 8)
+  quantity_unsettled    Decimal             @default(0) @db.Decimal(28, 8)
+  cost_total            Decimal             @default(0) @db.Decimal(18, 2)
+  average_unit_cost     Decimal             @default(0) @db.Decimal(28, 8)
+  realized_pnl_life     Decimal             @default(0) @db.Decimal(18, 2)
+  version               Int                 @default(1)
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime            @default(now()) @db.Timestamptz(6)
+  position_lots         position_lots[]
+  clients               clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  investment_accounts   investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations         organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  securities            securities          @relation(fields: [security_id], references: [id], onUpdate: NoAction)
+
+  @@unique([portfolio_id, security_id])
+  @@index([organization_id, security_id], map: "positions_org_security_idx")
+}
+
+model reports {
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id    String        @db.Uuid
+  code               String
+  type               report_type
+  format             report_format @default(PDF)
+  status             report_status @default(QUEUED)
+  portfolio_id       String?       @db.Uuid
+  client_id          String?       @db.Uuid
+  period_start       DateTime?     @db.Date
+  period_end         DateTime?     @db.Date
+  object_key         String?
+  parameters_json    Json?
+  error_message      String?
+  generated_at       DateTime?     @db.Timestamptz(6)
+  created_at         DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime      @default(now()) @db.Timestamptz(6)
+  created_by_user_id String?       @db.Uuid
+  clients            clients?      @relation(fields: [client_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users              users?        @relation(fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations      organizations @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios         portfolios?   @relation(fields: [portfolio_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([organization_id, code])
+  @@index([organization_id, type, created_at(sort: Desc)], map: "reports_org_type_idx")
+}
+
+model role_assignments {
+  id                                               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                                          String        @db.Uuid
+  role_id                                          String        @db.Uuid
+  organization_id                                  String        @db.Uuid
+  client_id                                        String?       @db.Uuid
+  created_at                                       DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at                                       DateTime      @default(now()) @db.Timestamptz(6)
+  created_by_user_id                               String?       @db.Uuid
+  clients                                          clients?      @relation(fields: [client_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "role_assignments_client_fk")
+  users_role_assignments_created_by_user_idTousers users?        @relation("role_assignments_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                                    organizations @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  roles                                            roles         @relation(fields: [role_id], references: [id], onUpdate: NoAction)
+  users_role_assignments_user_idTousers            users         @relation("role_assignments_user_idTousers", fields: [user_id], references: [id], onUpdate: NoAction)
+
+  @@unique([user_id, role_id, organization_id], map: "role_assignments_user_role_org_uk")
+  @@index([organization_id, user_id], map: "role_assignments_org_user_idx")
+}
+
+model role_permissions {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  role_id       String      @db.Uuid
+  permission_id String      @db.Uuid
+  created_at    DateTime    @default(now()) @db.Timestamptz(6)
+  permissions   permissions @relation(fields: [permission_id], references: [id], onUpdate: NoAction)
+  roles         roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([role_id, permission_id])
+}
+
+model roles {
+  id                                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                       String             @db.Uuid
+  code                                  String
+  name                                  String
+  is_system                             Boolean            @default(false)
+  status                                role_lifecycle     @default(ACTIVE)
+  created_at                            DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at                            DateTime           @default(now()) @db.Timestamptz(6)
+  created_by_user_id                    String?            @db.Uuid
+  updated_by_user_id                    String?            @db.Uuid
+  role_assignments                      role_assignments[]
+  role_permissions                      role_permissions[]
+  users_roles_created_by_user_idTousers users?             @relation("roles_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                         organizations      @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_roles_updated_by_user_idTousers users?             @relation("roles_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+
+  @@unique([organization_id, code], map: "roles_org_code_uk")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model securities {
+  id                                         String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                            String                      @db.Uuid
+  code                                       String
+  name                                       String
+  isin                                       String?
+  ticker                                     String?
+  class                                      security_class
+  currency                                   String                      @db.Char(3)
+  quantity_convention                        quantity_convention
+  status                                     security_status             @default(ACTIVE)
+  issuer_name                                String?
+  maturity_on                                DateTime?                   @db.Date
+  face_value                                 Decimal?                    @db.Decimal(28, 8)
+  coupon_rate                                Decimal?                    @db.Decimal(12, 8)
+  day_count                                  String?
+  exchange                                   String?
+  created_at                                 DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at                                 DateTime                    @default(now()) @db.Timestamptz(6)
+  created_by_user_id                         String?                     @db.Uuid
+  updated_by_user_id                         String?                     @db.Uuid
+  ledger_entries                             ledger_entries[]
+  mandate_rules                              mandate_rules[]
+  orders                                     orders[]
+  portfolio_valuation_lines                  portfolio_valuation_lines[]
+  position_lots                              position_lots[]
+  positions                                  positions[]
+  users_securities_created_by_user_idTousers users?                      @relation("securities_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations                              organizations               @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_securities_updated_by_user_idTousers users?                      @relation("securities_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  security_prices                            security_prices[]
+  trades                                     trades[]
+  transactions                               transactions[]
+
+  @@unique([organization_id, code])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model security_prices {
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id    String        @db.Uuid
+  security_id        String        @db.Uuid
+  price_date         DateTime      @db.Date
+  price              Decimal       @db.Decimal(28, 8)
+  source             String
+  currency           String        @db.Char(3)
+  is_official        Boolean       @default(true)
+  created_at         DateTime      @default(now()) @db.Timestamptz(6)
+  created_by_user_id String?       @db.Uuid
+  users              users?        @relation(fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  organizations      organizations @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  securities         securities    @relation(fields: [security_id], references: [id], onUpdate: NoAction)
+
+  @@index([security_id, price_date(sort: Desc), created_at(sort: Desc)], map: "security_prices_lookup_idx")
+}
+
+model settlements {
+  id                                            String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                               String              @db.Uuid
+  client_id                                     String              @db.Uuid
+  investment_account_id                         String              @db.Uuid
+  portfolio_id                                  String              @db.Uuid
+  trade_id                                      String              @unique @db.Uuid
+  code                                          String
+  status                                        settlement_status   @default(PENDING)
+  settlement_date                               DateTime            @db.Date
+  settled_amount                                Decimal             @db.Decimal(18, 2)
+  confirmed_by_user_id                          String?             @db.Uuid
+  confirmed_at                                  DateTime?           @db.Timestamptz(6)
+  failure_reason                                String?
+  notes                                         String?
+  correlation_id                                String?
+  created_at                                    DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at                                    DateTime            @default(now()) @db.Timestamptz(6)
+  created_by_user_id                            String?             @db.Uuid
+  ledger_journals                               ledger_journals[]
+  clients                                       clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_settlements_confirmed_by_user_idTousers users?              @relation("settlements_confirmed_by_user_idTousers", fields: [confirmed_by_user_id], references: [id], onUpdate: NoAction)
+  users_settlements_created_by_user_idTousers   users?              @relation("settlements_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  investment_accounts                           investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  organizations                                 organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios                                    portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  trades                                        trades              @relation(fields: [trade_id], references: [id], onUpdate: NoAction)
+  transactions                                  transactions[]
+
+  @@unique([organization_id, code])
+  @@index([status], map: "settlements_pending_idx", where: raw("(status = 'PENDING'::settlement_status)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model trades {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String              @db.Uuid
+  client_id             String              @db.Uuid
+  investment_account_id String              @db.Uuid
+  portfolio_id          String              @db.Uuid
+  order_id              String              @unique @db.Uuid
+  security_id           String              @db.Uuid
+  code                  String
+  side                  order_side
+  status                trade_status        @default(RECORDED)
+  trade_date            DateTime            @db.Date
+  quantity              Decimal             @db.Decimal(28, 8)
+  price                 Decimal             @db.Decimal(28, 8)
+  consideration         Decimal             @db.Decimal(18, 2)
+  fees                  Decimal             @default(0) @db.Decimal(18, 2)
+  net_amount            Decimal             @db.Decimal(18, 2)
+  counterparty          String?
+  execution_reference   String?
+  recorded_by_user_id   String              @db.Uuid
+  recorded_at           DateTime            @default(now()) @db.Timestamptz(6)
+  correlation_id        String?
+  created_at            DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime            @default(now()) @db.Timestamptz(6)
+  ledger_journals       ledger_journals[]
+  position_lots         position_lots[]
+  settlements           settlements?
+  clients               clients             @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  investment_accounts   investment_accounts @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  orders                orders              @relation(fields: [order_id], references: [id], onUpdate: NoAction)
+  organizations         organizations       @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios            portfolios          @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  users                 users               @relation(fields: [recorded_by_user_id], references: [id], onUpdate: NoAction)
+  securities            securities          @relation(fields: [security_id], references: [id], onUpdate: NoAction)
+  transactions          transactions[]
+
+  @@unique([organization_id, code])
+  @@index([portfolio_id, trade_date], map: "trades_portfolio_date_idx")
+}
+
+model transactions {
+  id                                                                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                                   String                @db.Uuid
+  client_id                                                         String                @db.Uuid
+  investment_account_id                                             String                @db.Uuid
+  portfolio_id                                                      String                @db.Uuid
+  code                                                              String
+  type                                                              transaction_type
+  status                                                            transaction_status    @default(INITIATED)
+  value_date                                                        DateTime              @db.Date
+  amount                                                            Decimal               @db.Decimal(18, 2)
+  quantity                                                          Decimal?              @db.Decimal(28, 8)
+  security_id                                                       String?               @db.Uuid
+  order_id                                                          String?               @db.Uuid
+  trade_id                                                          String?               @db.Uuid
+  settlement_id                                                     String?               @db.Uuid
+  related_transaction_id                                            String?               @db.Uuid
+  fee_accrual_id                                                    String?               @db.Uuid
+  client_bank_account_id                                            String?               @db.Uuid
+  external_reference                                                String?
+  reason                                                            String?
+  before_state_json                                                 Json?
+  after_state_json                                                  Json?
+  gross_amount                                                      Decimal?              @db.Decimal(18, 2)
+  wht_amount                                                        Decimal               @default(0) @db.Decimal(18, 2)
+  net_amount                                                        Decimal?              @db.Decimal(18, 2)
+  idempotency_key                                                   String
+  approved_by_user_id                                               String?               @db.Uuid
+  posted_at                                                         DateTime?             @db.Timestamptz(6)
+  completed_at                                                      DateTime?             @db.Timestamptz(6)
+  failure_code                                                      String?
+  notes                                                             String?
+  correlation_id                                                    String?
+  created_at                                                        DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at                                                        DateTime              @default(now()) @db.Timestamptz(6)
+  created_by_user_id                                                String?               @db.Uuid
+  updated_by_user_id                                                String?               @db.Uuid
+  cash_reservations                                                 cash_reservations[]
+  compliance_checks                                                 compliance_checks[]
+  fee_accruals_fee_accruals_accrual_transaction_idTotransactions    fee_accruals[]        @relation("fee_accruals_accrual_transaction_idTotransactions")
+  fee_accruals_fee_accruals_collection_transaction_idTotransactions fee_accruals[]        @relation("fee_accruals_collection_transaction_idTotransactions")
+  idempotency_records                                               idempotency_records[]
+  ledger_journals                                                   ledger_journals[]
+  position_lots                                                     position_lots[]
+  users_transactions_approved_by_user_idTousers                     users?                @relation("transactions_approved_by_user_idTousers", fields: [approved_by_user_id], references: [id], onUpdate: NoAction)
+  client_bank_accounts                                              client_bank_accounts? @relation(fields: [client_bank_account_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  clients                                                           clients               @relation(fields: [client_id], references: [id], onUpdate: NoAction)
+  users_transactions_created_by_user_idTousers                      users?                @relation("transactions_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  fee_accruals_transactions_fee_accrual_idTofee_accruals            fee_accruals?         @relation("transactions_fee_accrual_idTofee_accruals", fields: [fee_accrual_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "transactions_fee_accrual_fk")
+  investment_accounts                                               investment_accounts   @relation(fields: [investment_account_id], references: [id], onUpdate: NoAction)
+  orders                                                            orders?               @relation(fields: [order_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations                                                     organizations         @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  portfolios                                                        portfolios            @relation(fields: [portfolio_id], references: [id], onUpdate: NoAction)
+  transactions                                                      transactions?         @relation("transactionsTotransactions", fields: [related_transaction_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_transactions                                                transactions[]        @relation("transactionsTotransactions")
+  securities                                                        securities?           @relation(fields: [security_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  settlements                                                       settlements?          @relation(fields: [settlement_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  trades                                                            trades?               @relation(fields: [trade_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  users_transactions_updated_by_user_idTousers                      users?                @relation("transactions_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+
+  @@unique([organization_id, external_reference], map: "transactions_deposit_ref_uk", where: raw("((type = 'DEPOSIT'::transaction_type) AND (external_reference IS NOT NULL) AND (status <> ALL (ARRAY['FAILED'::transaction_status, 'EXCEPTION'::transaction_status])))"))
+  @@unique([organization_id, code])
+  @@index([portfolio_id, type, status], map: "transactions_portfolio_type_status_idx")
+  @@index([related_transaction_id], map: "transactions_related_idx")
+}
+
+model users {
+  id                                                                  String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                                     String                 @db.Uuid
+  email                                                               String                 @unique @db.Citext
+  password_hash                                                       String?
+  full_name                                                           String
+  status                                                              user_status            @default(INVITED)
+  mfa_enabled                                                         Boolean                @default(false)
+  mfa_secret_encrypted                                                String?
+  last_login_at                                                       DateTime?              @db.Timestamptz(6)
+  password_changed_at                                                 DateTime?              @db.Timestamptz(6)
+  client_id                                                           String?                @db.Uuid
+  created_at                                                          DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at                                                          DateTime               @default(now()) @db.Timestamptz(6)
+  created_by_user_id                                                  String?                @db.Uuid
+  updated_by_user_id                                                  String?                @db.Uuid
+  accounting_policies_accounting_policies_created_by_user_idTousers   accounting_policies[]  @relation("accounting_policies_created_by_user_idTousers")
+  accounting_policies_accounting_policies_updated_by_user_idTousers   accounting_policies[]  @relation("accounting_policies_updated_by_user_idTousers")
+  audit_events                                                        audit_events[]
+  cash_reservations                                                   cash_reservations[]
+  client_bank_accounts_client_bank_accounts_created_by_user_idTousers client_bank_accounts[] @relation("client_bank_accounts_created_by_user_idTousers")
+  client_bank_accounts_client_bank_accounts_updated_by_user_idTousers client_bank_accounts[] @relation("client_bank_accounts_updated_by_user_idTousers")
+  client_documents_client_documents_created_by_user_idTousers         client_documents[]     @relation("client_documents_created_by_user_idTousers")
+  client_documents_client_documents_updated_by_user_idTousers         client_documents[]     @relation("client_documents_updated_by_user_idTousers")
+  client_documents_client_documents_verified_by_user_idTousers        client_documents[]     @relation("client_documents_verified_by_user_idTousers")
+  clients_clients_created_by_user_idTousers                           clients[]              @relation("clients_created_by_user_idTousers")
+  clients_clients_updated_by_user_idTousers                           clients[]              @relation("clients_updated_by_user_idTousers")
+  compliance_breaches                                                 compliance_breaches[]
+  fee_rules_fee_rules_created_by_user_idTousers                       fee_rules[]            @relation("fee_rules_created_by_user_idTousers")
+  fee_rules_fee_rules_updated_by_user_idTousers                       fee_rules[]            @relation("fee_rules_updated_by_user_idTousers")
+  fund_nav_prices                                                     fund_nav_prices[]
+  fund_orders_fund_orders_approved_by_user_idTousers                  fund_orders[]          @relation("fund_orders_approved_by_user_idTousers")
+  fund_orders_fund_orders_callback_by_user_idTousers                  fund_orders[]          @relation("fund_orders_callback_by_user_idTousers")
+  fund_orders_fund_orders_confirmed_by_user_idTousers                 fund_orders[]          @relation("fund_orders_confirmed_by_user_idTousers")
+  fund_orders_fund_orders_created_by_user_idTousers                   fund_orders[]          @relation("fund_orders_created_by_user_idTousers")
+  fund_orders_fund_orders_payment_verified_by_user_idTousers          fund_orders[]          @relation("fund_orders_payment_verified_by_user_idTousers")
+  fund_orders_fund_orders_rejected_by_user_idTousers                  fund_orders[]          @relation("fund_orders_rejected_by_user_idTousers")
+  fund_orders_fund_orders_submitted_by_user_idTousers                 fund_orders[]          @relation("fund_orders_submitted_by_user_idTousers")
+  fund_orders_fund_orders_updated_by_user_idTousers                   fund_orders[]          @relation("fund_orders_updated_by_user_idTousers")
+  fund_unit_positions                                                 fund_unit_positions[]
+  funds_funds_created_by_user_idTousers                               funds[]                @relation("funds_created_by_user_idTousers")
+  funds_funds_updated_by_user_idTousers                               funds[]                @relation("funds_updated_by_user_idTousers")
+  investment_accounts_investment_accounts_created_by_user_idTousers   investment_accounts[]  @relation("investment_accounts_created_by_user_idTousers")
+  investment_accounts_investment_accounts_updated_by_user_idTousers   investment_accounts[]  @relation("investment_accounts_updated_by_user_idTousers")
+  kyc_records_kyc_records_created_by_user_idTousers                   kyc_records[]          @relation("kyc_records_created_by_user_idTousers")
+  kyc_records_kyc_records_reviewed_by_user_idTousers                  kyc_records[]          @relation("kyc_records_reviewed_by_user_idTousers")
+  kyc_records_kyc_records_updated_by_user_idTousers                   kyc_records[]          @relation("kyc_records_updated_by_user_idTousers")
+  ledger_accounts_ledger_accounts_created_by_user_idTousers           ledger_accounts[]      @relation("ledger_accounts_created_by_user_idTousers")
+  ledger_accounts_ledger_accounts_updated_by_user_idTousers           ledger_accounts[]      @relation("ledger_accounts_updated_by_user_idTousers")
+  ledger_journals                                                     ledger_journals[]
+  orders_orders_approved_by_user_idTousers                            orders[]               @relation("orders_approved_by_user_idTousers")
+  orders_orders_callback_by_user_idTousers                            orders[]               @relation("orders_callback_by_user_idTousers")
+  orders_orders_created_by_user_idTousers                             orders[]               @relation("orders_created_by_user_idTousers")
+  orders_orders_rejected_by_user_idTousers                            orders[]               @relation("orders_rejected_by_user_idTousers")
+  orders_orders_submitted_by_user_idTousers                           orders[]               @relation("orders_submitted_by_user_idTousers")
+  orders_orders_updated_by_user_idTousers                             orders[]               @relation("orders_updated_by_user_idTousers")
+  organizations_organizations_created_by_user_idTousers               organizations[]        @relation("organizations_created_by_user_idTousers")
+  organizations_organizations_updated_by_user_idTousers               organizations[]        @relation("organizations_updated_by_user_idTousers")
+  portfolio_mandates_portfolio_mandates_created_by_user_idTousers     portfolio_mandates[]   @relation("portfolio_mandates_created_by_user_idTousers")
+  portfolio_mandates_portfolio_mandates_updated_by_user_idTousers     portfolio_mandates[]   @relation("portfolio_mandates_updated_by_user_idTousers")
+  portfolio_valuations                                                portfolio_valuations[]
+  portfolios_portfolios_created_by_user_idTousers                     portfolios[]           @relation("portfolios_created_by_user_idTousers")
+  portfolios_portfolios_updated_by_user_idTousers                     portfolios[]           @relation("portfolios_updated_by_user_idTousers")
+  reports                                                             reports[]
+  role_assignments_role_assignments_created_by_user_idTousers         role_assignments[]     @relation("role_assignments_created_by_user_idTousers")
+  role_assignments_role_assignments_user_idTousers                    role_assignments[]     @relation("role_assignments_user_idTousers")
+  roles_roles_created_by_user_idTousers                               roles[]                @relation("roles_created_by_user_idTousers")
+  roles_roles_updated_by_user_idTousers                               roles[]                @relation("roles_updated_by_user_idTousers")
+  securities_securities_created_by_user_idTousers                     securities[]           @relation("securities_created_by_user_idTousers")
+  securities_securities_updated_by_user_idTousers                     securities[]           @relation("securities_updated_by_user_idTousers")
+  security_prices                                                     security_prices[]
+  settlements_settlements_confirmed_by_user_idTousers                 settlements[]          @relation("settlements_confirmed_by_user_idTousers")
+  settlements_settlements_created_by_user_idTousers                   settlements[]          @relation("settlements_created_by_user_idTousers")
+  trades                                                              trades[]
+  transactions_transactions_approved_by_user_idTousers                transactions[]         @relation("transactions_approved_by_user_idTousers")
+  transactions_transactions_created_by_user_idTousers                 transactions[]         @relation("transactions_created_by_user_idTousers")
+  transactions_transactions_updated_by_user_idTousers                 transactions[]         @relation("transactions_updated_by_user_idTousers")
+  clients_users_client_idToclients                                    clients?               @relation("users_client_idToclients", fields: [client_id], references: [id], onUpdate: NoAction, map: "users_client_fk")
+  users_users_created_by_user_idTousers                               users?                 @relation("users_created_by_user_idTousers", fields: [created_by_user_id], references: [id], onUpdate: NoAction)
+  other_users_users_created_by_user_idTousers                         users[]                @relation("users_created_by_user_idTousers")
+  organizations_users_organization_idToorganizations                  organizations          @relation("users_organization_idToorganizations", fields: [organization_id], references: [id], onUpdate: NoAction)
+  users_users_updated_by_user_idTousers                               users?                 @relation("users_updated_by_user_idTousers", fields: [updated_by_user_id], references: [id], onUpdate: NoAction)
+  other_users_users_updated_by_user_idTousers                         users[]                @relation("users_updated_by_user_idTousers")
+
+  @@index([client_id], map: "users_client_idx", where: raw("(client_id IS NOT NULL)"))
+}
+
+enum bank_account_status {
+  ACTIVE
+  INACTIVE
+}
+
+enum breach_status {
+  OPEN
+  WAIVED
+  RESOLVED
+}
+
+enum callback_outcome {
+  CONFIRMED
+  FAILED
+  NOT_REACHED
+}
+
+enum cis_funding_source {
+  FUND_CUSTODIAN
+  PORTFOLIO_CASH
+}
+
+enum cis_order_side {
+  SUBSCRIBE
+  REDEEM
+}
+
+enum client_status {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum client_type {
+  INDIVIDUAL
+  CORPORATE
+  JOINT
+  TRUST
+  OTHER
+}
+
+enum compliance_result {
+  PASS
+  FAIL
+  NOT_APPLICABLE
+}
+
+enum cost_method {
+  WEIGHTED_AVERAGE
+}
+
+enum document_status {
+  UPLOADED
+  VERIFIED
+  REJECTED
+  ARCHIVED
+}
+
+enum document_type {
+  ID
+  UTILITY_BILL
+  CAC
+  BOARD_RESOLUTION
+  PROOF_OF_ADDRESS
+  KYC_PACK
+  EMAIL_INDEMNITY
+  TRADE_INSTRUCTION
+  CIS_INSTRUCTION
+  CONTRACT_NOTE
+  OTHER
+}
+
+enum equity_holding_arrangement {
+  DIRECT_BROKERAGE
+  NOMINEE_OMNIBUS
+}
+
+enum fee_accrual_status {
+  ACCRUED
+  COLLECTED
+  REVERSED
+}
+
+enum fee_rule_status {
+  ACTIVE
+  INACTIVE
+}
+
+enum fee_type {
+  MANAGEMENT
+  TRANSACTION
+}
+
+enum fund_status {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum income_recognition {
+  RECEIPT
+}
+
+enum investment_account_status {
+  PENDING
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum journal_status {
+  POSTED
+}
+
+enum journal_type {
+  DEPOSIT
+  WITHDRAWAL_APPROVAL
+  WITHDRAWAL_PAYMENT
+  BUY_TRADE
+  BUY_SETTLEMENT
+  SELL_TRADE
+  SELL_SETTLEMENT
+  DIVIDEND
+  INTEREST
+  REDEMPTION
+  FEE_ACCRUAL
+  FEE_COLLECTION
+  TRANSFER_OUT
+  TRANSFER_IN
+  ADJUSTMENT
+  REVERSAL
+  CIS_SUBSCRIPTION
+  CIS_REDEMPTION
+}
+
+enum kyc_photo_id_type {
+  DRIVERS_LICENSE
+  NIN
+  PASSPORT
+  VOTERS_CARD
+}
+
+enum kyc_status {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum ledger_account_lifecycle {
+  ACTIVE
+  INACTIVE
+}
+
+enum ledger_account_role {
+  CASH
+  SETTLEMENTS_RECEIVABLE
+  SETTLEMENTS_PAYABLE
+  INVESTMENT_TBILLS
+  INVESTMENT_BONDS
+  INVESTMENT_EQUITIES
+  INVESTMENT_FIXED_INCOME
+  INVESTMENT_CIS
+  WITHDRAWAL_PAYABLE
+  FEE_PAYABLE
+  CLIENT_CAPITAL
+  RETAINED_EARNINGS
+  DIVIDEND_INCOME
+  INTEREST_INCOME
+  REALIZED_GAIN
+  REALIZED_LOSS
+  MANAGEMENT_FEE_EXPENSE
+  TRANSACTION_FEE_EXPENSE
+  WHT_EXPENSE
+  ROUNDING
+}
+
+enum ledger_account_type {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+}
+
+enum lot_settlement_status {
+  UNSETTLED
+  SETTLED
+}
+
+enum lot_status {
+  OPEN
+  CLOSED
+}
+
+enum mandate_rule_type {
+  MAX_ALLOCATION_PCT
+  MIN_ALLOCATION_PCT
+  ALLOWED_SECURITY_CLASS
+  FORBIDDEN_SECURITY_CLASS
+  MAX_SINGLE_SECURITY_PCT
+  MAX_ORDER_AMOUNT
+}
+
+enum mandate_status {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  SUPERSEDED
+}
+
+enum order_side {
+  BUY
+  SELL
+}
+
+enum order_status {
+  DRAFT
+  SUBMITTED
+  PENDING_APPROVAL
+  APPROVED
+  FILLED
+  COMPLIANCE_FAILED
+  REJECTED
+  CANCELLED
+}
+
+enum order_type {
+  MARKET
+  LIMIT
+}
+
+enum organization_status {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum performance_period_type {
+  DAY
+  MTD
+  QTD
+  YTD
+  CUSTOM
+}
+
+enum portfolio_status {
+  PENDING
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum quantity_convention {
+  SHARES
+  FACE_VALUE
+  CURRENCY_UNITS
+}
+
+enum recognition_basis {
+  TRADE_DATE
+}
+
+enum report_format {
+  PDF
+  CSV
+}
+
+enum report_status {
+  QUEUED
+  GENERATED
+  FAILED
+}
+
+enum report_type {
+  CLIENT_STATEMENT
+  PORTFOLIO_STATEMENT
+  HOLDINGS
+  TRANSACTIONS
+  PERFORMANCE
+  FEES
+  AUDIT
+  TRADE_CONFIRMATION
+  CIS_CONFIRMATION
+  CIS_UNIT_STATEMENT
+}
+
+enum reservation_purpose {
+  ORDER_BUY
+  WITHDRAWAL
+  CIS_SUBSCRIBE
+  CIS_REDEEM
+  OTHER
+}
+
+enum reservation_status {
+  ACTIVE
+  CONSUMED
+  RELEASED
+}
+
+enum role_lifecycle {
+  ACTIVE
+  ARCHIVED
+}
+
+enum security_class {
+  CASH
+  TREASURY_BILL
+  GOVERNMENT_BOND
+  EQUITY
+  FIXED_INCOME
+}
+
+enum security_status {
+  ACTIVE
+  SUSPENDED
+  MATURED
+  DELISTED
+}
+
+enum settlement_status {
+  PENDING
+  CONFIRMED
+  FAILED
+  EXCEPTION
+}
+
+enum trade_status {
+  RECORDED
+  SETTLEMENT_PENDING
+  SETTLED
+  SETTLEMENT_FAILED
+  REVERSED
+}
+
+enum transaction_cost_treatment {
+  EXPENSE
+}
+
+enum transaction_status {
+  INITIATED
+  VALIDATED
+  PENDING_APPROVAL
+  APPROVED
+  PROCESSING
+  CONFIRMED
+  POSTED
+  COMPLETED
+  FAILED
+  EXCEPTION
+  REVERSED
+}
+
+enum transaction_type {
+  DEPOSIT
+  WITHDRAWAL
+  BUY
+  SELL
+  DIVIDEND
+  INTEREST
+  REDEMPTION
+  FEE
+  TRANSFER
+  ADJUSTMENT
+  REVERSAL
+  CIS_SUBSCRIPTION
+  CIS_REDEMPTION
+}
+
+enum user_status {
+  INVITED
+  ACTIVE
+  LOCKED
+  DISABLED
+}
+
+enum valuation_basis {
+  FAIR_VALUE
 }

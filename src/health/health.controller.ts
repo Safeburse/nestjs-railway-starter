@@ -1,6 +1,6 @@
 import { Controller, Get, HttpCode } from "@nestjs/common"
 
-import { PrismaService } from "./prisma.service"
+import { PrismaService } from "../prisma/prisma.service"
 
 @Controller()
 export class HealthController {
@@ -9,13 +9,13 @@ export class HealthController {
   @Get()
   index() {
     return {
-      message: "NestJS + Prisma on Railway",
-      endpoints: ["GET /health", "GET /notes", "POST /notes"],
+      service: "oriva-asset",
+      endpoints: ["GET /health"],
     }
   }
 
-  // The check touches the database, so a deployment that cannot reach Postgres
-  // reports unhealthy rather than looking fine and failing on the first request.
+  // Touches Postgres so a deploy that cannot reach the database reports
+  // unhealthy rather than looking fine and failing on the first request.
   @Get("health")
   @HttpCode(200)
   async health() {
